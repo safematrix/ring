@@ -33,6 +33,7 @@ const X86: &str = "x86";
 const X86_64: &str = "x86_64";
 const AARCH64: &str = "aarch64";
 const ARM: &str = "arm";
+const WASM: &str = "wasm32";
 
 #[rustfmt::skip]
 const RING_SRCS: &[(&[&str], &str)] = &[
@@ -43,20 +44,20 @@ const RING_SRCS: &[(&[&str], &str)] = &[
     (&[], "crypto/mem.c"),
     (&[], "crypto/poly1305/poly1305.c"),
 
-    (&[AARCH64, ARM, X86_64, X86], "crypto/crypto.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/curve25519/curve25519.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/ecp_nistz.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/ecp_nistz256.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/gfp_p256.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/gfp_p384.c"),
+    (&[AARCH64, ARM, X86_64, X86, WASM], "crypto/crypto.c"),
+    (&[AARCH64, ARM, X86_64, X86, WASM], "crypto/curve25519/curve25519.c"),
+    (&[AARCH64, ARM, X86_64, X86, WASM], "crypto/fipsmodule/ec/ecp_nistz.c"),
+    (&[AARCH64, ARM, X86_64, X86, WASM], "crypto/fipsmodule/ec/ecp_nistz256.c"),
+    (&[AARCH64, ARM, X86_64, X86, WASM], "crypto/fipsmodule/ec/gfp_p256.c"),
+    (&[AARCH64, ARM, X86_64, X86, WASM], "crypto/fipsmodule/ec/gfp_p384.c"),
 
     (&[X86_64, X86], "crypto/cpu-intel.c"),
 
     (&[X86], "crypto/fipsmodule/aes/asm/aesni-x86.pl"),
     (&[X86], "crypto/fipsmodule/aes/asm/vpaes-x86.pl"),
-    (&[X86], "crypto/fipsmodule/bn/asm/x86-mont.pl"),
+    (&[X86, WASM], "crypto/fipsmodule/bn/asm/x86-mont.pl"),
     (&[X86], "crypto/chacha/asm/chacha-x86.pl"),
-    (&[X86], "crypto/fipsmodule/ec/asm/ecp_nistz256-x86.pl"),
+    (&[X86, WASM], "crypto/fipsmodule/ec/asm/ecp_nistz256-x86.pl"),
     (&[X86], "crypto/fipsmodule/modes/asm/ghash-x86.pl"),
 
     (&[X86_64], "crypto/fipsmodule/aes/asm/aesni-x86_64.pl"),
@@ -242,6 +243,7 @@ fn main() {
         }
     }
 
+
     pregenerate_asm_main();
 }
 
@@ -281,6 +283,7 @@ fn ring_build_rs_main() {
 }
 
 fn pregenerate_asm_main() {
+    println!("cargo:warning=pregenerate_asm_main.==========\n========\n");
     let pregenerated = PathBuf::from(PREGENERATED);
     std::fs::create_dir(&pregenerated).unwrap();
     let pregenerated_tmp = pregenerated.join("tmp");
@@ -323,13 +326,6 @@ struct Target {
 }
 
 fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
-    #[cfg(not(feature = "wasm32_c"))]
-    {
-        if &target.arch == "wasm32" {
-            return;
-        }
-    }
-
     let includes_modified = RING_INCLUDES
         .iter()
         .chain(RING_BUILD_FILE.iter())
@@ -349,6 +345,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
         }
     }
 
+    // select perlasm_format
     let (_, _, perlasm_format) = ASM_TARGETS
         .iter()
         .find(|entry| {
@@ -360,6 +357,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
     let use_pregenerated = !target.is_git;
     let warnings_are_errors = target.is_git;
 
+    // to knwon output dir
     let asm_dir = if use_pregenerated {
         &pregenerated
     } else {
@@ -370,6 +368,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
         let perlasm_src_dsts =
             perlasm_src_dsts(asm_dir, &target.arch, Some(&target.os), perlasm_format);
 
+        println!("cargo:warning=pregenerated: {}", use_pregenerated);
         if !use_pregenerated {
             perlasm(
                 &perlasm_src_dsts[..],
@@ -398,13 +397,16 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
         Vec::new()
     };
 
+    // get core code list filter by target arch, and ignore pl
     let core_srcs = sources_for_arch(&target.arch)
         .into_iter()
         .filter(|p| !is_perlasm(&p))
         .collect::<Vec<_>>();
 
+    // get test code list
     let test_srcs = RING_TEST_SRCS.iter().map(PathBuf::from).collect::<Vec<_>>();
 
+    // lib name, source code, asm code
     let libs = [
         ("ring-core", &core_srcs[..], &asm_srcs[..]),
         ("ring-test", &test_srcs[..], &[]),
@@ -496,6 +498,7 @@ fn compile(
     out_dir: &Path,
     includes_modified: SystemTime,
 ) -> String {
+    println!("cargo:warning=compile {:?}", p);
     let ext = p.extension().unwrap().to_str().unwrap();
     if ext == "obj" {
         p.to_str().expect("Invalid path").into()
@@ -648,7 +651,7 @@ where
 }
 
 fn run_command(mut cmd: Command) {
-    eprintln!("running {:?}", cmd);
+    // println!("cargo:warning=run {:?}", cmd);
     let status = cmd.status().unwrap_or_else(|e| {
         panic!("failed to execute [{:?}]: {}", cmd, e);
     });
@@ -725,6 +728,7 @@ fn perlasm(
     perlasm_format: &str,
     includes_modified: Option<SystemTime>,
 ) {
+    println!("cargo:warning=call perlasm {:?}", src_dst);
     for (src, dst) in src_dst {
         if let Some(includes_modified) = includes_modified {
             if !need_run(src, dst, includes_modified) {
@@ -735,7 +739,7 @@ fn perlasm(
         let mut args = Vec::<String>::new();
         args.push(src.to_string_lossy().into_owned());
         args.push(perlasm_format.to_owned());
-        if arch == "x86" {
+        if arch == "x86" || arch == "wasm32" {
             args.push("-fPIC".into());
             args.push("-DOPENSSL_IA32_SSE2".into());
         }
@@ -746,6 +750,7 @@ fn perlasm(
             .expect("Could not convert path")
             .replace("\\", "/");
         args.push(dst);
+        println!("cargo:warning=run perl {:?}", args);
         run_command_with_args(&get_command("PERL_EXECUTABLE", "perl"), &args);
     }
 }
